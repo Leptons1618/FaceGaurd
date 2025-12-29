@@ -1,0 +1,11 @@
+[workspace]
+members = [
+  "core",
+  "ui"
+]
+
+exclude = [
+  "ui/src-tauri"
+]
+
+resolver = "2"
