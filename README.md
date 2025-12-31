@@ -20,7 +20,7 @@ FaceGaurd is a multi-component Rust project for facial recognition and security 
 
 1. **Clone the repository:**
    ```sh
-   git clone <repo-url>
+   git clone https://github.com/Leptons1618/FaceGaurd.git
    cd FaceGaurd
    ```
 2. **Build core crate:**
