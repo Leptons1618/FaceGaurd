@@ -1,0 +1,34 @@
+--- a/ui/src/main.rs
++++ b/ui/src/main.rs
+@@ -212,7 +212,8 @@
+                 // Generate events for new tracks
+                 let mut event_log_mut = event_log.write();
+                 for track in &active_tracks {
+                     if track.frames_tracked == 1 {
+                         // New face detected
+                         event_log_mut.add_event(
+@@ -223,8 +224,11 @@
+                         );
+                     }
+                 }
++                let log_clone = event_log_mut.clone();
++                drop(event_log_mut);
+                 
+                 // Save event log
+-                save_event_log(&event_log());
++                save_event_log(&log_clone);
+             }
+             
+             // Draw overlays
+@@ -723,9 +727,9 @@
+ 
+     let ctx_result: Result<CanvasRenderingContext2d, JsValue> = canvas
+         .get_context("2d")
+-        .map_err(|_| JsValue::NULL)?
++        .unwrap_or(Ok(None))
+         .ok_or(JsValue::NULL)
+-        .and_then(|v| v.dyn_into());
++        .and_then(|v: js_sys::Object| v.dyn_into());
+     
+     if ctx_result.is_err() {
+         return;

@@ -8,13 +8,35 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{
-    CanvasRenderingContext2d, HtmlCanvasElement, HtmlElement, HtmlVideoElement, ImageData,
-    MediaStream, MediaStreamConstraints,
+    Blob, CanvasRenderingContext2d, HtmlCanvasElement, HtmlElement, HtmlVideoElement, ImageData,
+    MediaStream, MediaStreamConstraints, Url,
 };
 
 // Global state keys for persistence
 const IDENTITY_DB_KEY: &str = "faceguard_identities";
 const EVENT_LOG_KEY: &str = "faceguard_events";
+const SETTINGS_KEY: &str = "faceguard_settings";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct AppSettings {
+    detection_threshold: f64,
+    recognition_threshold: f64,
+    enable_tracking: bool,
+    nms_threshold: f32,
+    max_track_age_ms: u64,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            detection_threshold: 0.7,
+            recognition_threshold: 0.85,
+            enable_tracking: true,
+            nms_threshold: 0.4,
+            max_track_age_ms: 3000,
+        }
+    }
+}
 
 const GLOBAL_STYLE: &str = r#"
     :root {
@@ -109,10 +131,10 @@ fn app() -> Element {
 
 #[component]
 fn Dashboard() -> Element {
-    let identity_db = load_identity_db();
-    let event_log = load_event_log();
-    let identities = identity_db.get_all();
-    let events_data = event_log.get_recent(50);
+    let identity_db = use_signal(|| load_identity_db());
+    let event_log = use_signal(|| load_event_log());
+    let identities = identity_db().get_all();
+    let events_data = event_log().get_recent(50);
 
     rsx! {
         header { class: "hero",
@@ -125,7 +147,7 @@ fn Dashboard() -> Element {
 
         div { class: "stats",
             div { class: "stat", span { "Identities" } strong { "{identities.len()}" } }
-            div { class: "stat", span { "Total Events" } strong { "{event_log.get_all().len()}" } }
+            div { class: "stat", span { "Total Events" } strong { "{event_log().get_all().len()}" } }
             div { class: "stat", span { "Recent Events" } strong { "{events_data.len()}" } }
             div { class: "stat", span { "System" } strong { "Active" } }
         }
@@ -134,7 +156,7 @@ fn Dashboard() -> Element {
             h3 { "Recent Identities" }
             ul { class: "list",
                 for ident in identities.iter() {
-                    li { "{ident.name} · ID {ident.id}" }
+                    li { "{ident.name} · ID {ident.id} · conf {ident.confidence:.2}" }
                 }
                 if identities.is_empty() {
                     li { class: "muted", "No identities detected yet" }
@@ -150,6 +172,9 @@ fn LiveFeed() -> Element {
     let mut tracks = use_signal(|| vec![]);
     let mut frame_count = use_signal(|| 0);
     let mut fps = use_signal(|| 0.0);
+    let tracker = use_signal(|| tracking::Tracker::new(0.4, 3000));
+    let identity_db = use_signal(|| load_identity_db());
+    let mut event_log = use_signal(|| load_event_log());
 
     use_effect(move || {
         spawn_local(async move {
@@ -158,9 +183,7 @@ fn LiveFeed() -> Element {
             }
         });
 
-        let mut tracker = tracking::Tracker::new(0.4, 3000);
-        let last_time = js_sys::Date::now();
-        
+        let mut last_time = js_sys::Date::now();
         let _interval = Interval::new(100, move || {
             frame_count.set(frame_count() + 1);
             
@@ -170,6 +193,7 @@ fn LiveFeed() -> Element {
             if delta > 0.0 {
                 fps.set(1.0 / delta);
             }
+            last_time = now;
             
             // Process frame and detect faces
             if let Some(dets) = detect_faces_from_video("camera-feed", "temp-canvas") {
@@ -178,11 +202,29 @@ fn LiveFeed() -> Element {
                 
                 // Update tracker
                 let timestamp = now as u64;
-                let active_tracks = tracker.update(filtered_dets.clone(), timestamp);
+                let mut tracker_mut = tracker.write();
+                let active_tracks = tracker_mut.update(filtered_dets.clone(), timestamp);
                 
                 // Store results
                 detections.set(filtered_dets);
-                tracks.set(active_tracks);
+                tracks.set(active_tracks.clone());
+                
+                // Generate events for new tracks
+                let mut event_log_mut = event_log.write();
+                for track in &active_tracks {
+                    if track.frames_tracked == 1 {
+                        // New face detected
+                        event_log_mut.add_event(
+                            events::EventType::FaceDetected,
+                            format!("Track #{}", track.track_id),
+                            track.detection.confidence,
+                            Some(track.track_id),
+                        );
+                    }
+                }
+                
+                // Save event log
+                save_event_log(&event_log());
             }
             
             // Draw overlays
@@ -232,6 +274,9 @@ fn LiveFeed() -> Element {
                 for track in tracks().iter() {
                     li {
                         "Track #{track.track_id} · {track.frames_tracked} frames · conf {track.detection.confidence:.2}"
+                        if let Some(identity_id) = track.identity_id {
+                            " · Identity #{identity_id}"
+                        }
                     }
                 }
                 if tracks().is_empty() {
@@ -253,8 +298,8 @@ enum EventFilter {
 #[component]
 fn EventsPage() -> Element {
     let filter = use_signal(|| EventFilter::All);
-    let event_log = load_event_log();
-    let events_data = event_log.get_all();
+    let event_log = use_signal(|| load_event_log());
+    let events_data = event_log().get_all();
 
     let export_csv = {
         let filter = filter.clone();
@@ -407,9 +452,9 @@ fn filter_events(filter: EventFilter, events: &[events::FaceEvent]) -> Vec<event
 
 fn export_events_csv(filter: EventFilter, events: &[events::FaceEvent]) {
     let event_vec = filter_events(filter, events);
-    let mut csv = String::from("id,name,confidence,timestamp\n");
+    let mut csv = String::from("id,name,confidence\n");
     for event in event_vec.iter() {
-        csv.push_str(&format!("{},{},{},{}\n", event.id, event.name, event.confidence, event.timestamp));
+        csv.push_str(&format!("{},{},{}\n", event.id, event.name, event.confidence));
     }
     download_blob(&csv, "events.csv", "text/csv");
 }
@@ -421,8 +466,8 @@ fn export_events_json(filter: EventFilter, events: &[events::FaceEvent]) {
 }
 
 fn download_blob(content: &str, filename: &str, _mime: &str) {
-    if let Ok(blob) = web_sys::Blob::new_with_str_sequence(&Array::of1(&JsValue::from_str(content))) {
-        if let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) {
+    if let Ok(blob) = Blob::new_with_str_sequence(&Array::of1(&JsValue::from_str(content))) {
+        if let Ok(url) = Url::create_object_url_with_blob(&blob) {
             if let Some(window) = web_sys::window() {
                 if let Some(document) = window.document() {
                     if let Ok(a) = document.create_element("a") {
@@ -438,23 +483,9 @@ fn download_blob(content: &str, filename: &str, _mime: &str) {
                     }
                 }
             }
-            let _ = web_sys::Url::revoke_object_url(&url);
+            let _ = Url::revoke_object_url(&url);
         }
     }
-}
-
-// Persistence helpers
-fn load_identity_db() -> recognition::IdentityDatabase {
-    LocalStorage::get(IDENTITY_DB_KEY).unwrap_or_else(|_| {
-        let mut db = recognition::IdentityDatabase::new();
-        // Add some demo identities
-        db.add_identity("Demo User".to_string(), None);
-        db
-    })
-}
-
-fn load_event_log() -> events::EventLog {
-    LocalStorage::get(EVENT_LOG_KEY).unwrap_or_else(|_| events::EventLog::new(1000))
 }
 
 async fn start_camera(video_id: &str) -> Result<(), JsValue> {
@@ -487,6 +518,36 @@ async fn start_camera(video_id: &str) -> Result<(), JsValue> {
     Ok(())
 }
 
+// Persistence helpers
+fn load_identity_db() -> recognition::IdentityDatabase {
+    LocalStorage::get(IDENTITY_DB_KEY).unwrap_or_else(|_| {
+        let mut db = recognition::IdentityDatabase::new();
+        // Add some demo identities
+        db.add_identity("Demo User".to_string(), None);
+        db
+    })
+}
+
+fn save_identity_db(db: &recognition::IdentityDatabase) {
+    let _ = LocalStorage::set(IDENTITY_DB_KEY, db);
+}
+
+fn load_event_log() -> events::EventLog {
+    LocalStorage::get(EVENT_LOG_KEY).unwrap_or_else(|_| events::EventLog::new(1000))
+}
+
+fn save_event_log(log: &events::EventLog) {
+    let _ = LocalStorage::set(EVENT_LOG_KEY, log);
+}
+
+fn load_settings() -> AppSettings {
+    LocalStorage::get(SETTINGS_KEY).unwrap_or_default()
+}
+
+fn save_settings(settings: &AppSettings) {
+    let _ = LocalStorage::set(SETTINGS_KEY, settings);
+}
+
 /// Detect faces from video element using simple edge detection
 fn detect_faces_from_video(
     video_id: &str,
@@ -505,6 +566,7 @@ fn detect_faces_from_video(
         return None;
     }
 
+    // Set canvas to match video
     canvas.set_width(video_width);
     canvas.set_height(video_height);
 
@@ -514,12 +576,16 @@ fn detect_faces_from_video(
         .dyn_into()
         .ok()?;
 
+    // Draw video frame to canvas
     ctx.draw_image_with_html_video_element(&video, 0.0, 0.0).ok()?;
 
+    // Get image data
     let image_data = ctx
         .get_image_data(0.0, 0.0, video_width as f64, video_height as f64)
         .ok()?;
 
+    // Simple face detection using brightness detection
+    // In production, replace with actual ML model (MediaPipe, ONNX, etc.)
     let detections = simple_face_detection(&image_data, video_width, video_height);
 
     Some(detections)
@@ -535,6 +601,7 @@ fn simple_face_detection(
     let mut detections = Vec::new();
     let mut detection_id = 1;
 
+    // Divide frame into grid and look for face-like regions
     let grid_size = 64;
     let step_x = width / grid_size;
     let step_y = height / grid_size;
@@ -546,10 +613,14 @@ fn simple_face_detection(
             let w = step_x as f32;
             let h = step_y as f32;
 
+            // Sample brightness in this region
             let brightness = sample_brightness(&data, x as u32, y as u32, w as u32, h as u32, width);
 
+            // Face-like regions typically have moderate brightness (skin tones)
             if brightness > 0.3 && brightness < 0.7 {
+                // Check for face-like aspect ratio and variance
                 if (w / h - 1.0).abs() < 0.5 {
+                    // Calculate confidence based on how close to ideal skin tone
                     let confidence = 1.0 - ((brightness - 0.5).abs() * 2.0);
                     
                     if confidence > 0.6 {
@@ -603,34 +674,40 @@ fn sample_brightness(data: &[u8], x: u32, y: u32, w: u32, h: u32, img_width: u32
 fn draw_detections_and_tracks(
     video_id: &str,
     canvas_id: &str,
-    _detections: &[detection::FaceDetection],
+    detections: &[detection::FaceDetection],
     tracks: &[tracking::Track],
 ) {
-    let window = match web_sys::window() {
-        Some(w) => w,
-        None => return,
-    };
+    let window = web_sys::window();
+    if window.is_none() {
+        return;
+    }
+    let window = window.unwrap();
     
-    let document = match window.document() {
-        Some(d) => d,
-        None => return,
-    };
+    let document = window.document();
+    if document.is_none() {
+        return;
+    }
+    let document = document.unwrap();
 
-    let video: HtmlVideoElement = match document
+    let video_result: Result<HtmlVideoElement, _> = document
         .get_element_by_id(video_id)
-        .and_then(|el| el.dyn_into().ok())
-    {
-        Some(v) => v,
-        None => return,
-    };
+        .ok_or(JsValue::NULL)
+        .and_then(|el| el.dyn_into());
+    
+    if video_result.is_err() {
+        return;
+    }
+    let video = video_result.unwrap();
 
-    let canvas: HtmlCanvasElement = match document
+    let canvas_result: Result<HtmlCanvasElement, _> = document
         .get_element_by_id(canvas_id)
-        .and_then(|el| el.dyn_into().ok())
-    {
-        Some(c) => c,
-        None => return,
-    };
+        .ok_or(JsValue::NULL)
+        .and_then(|el| el.dyn_into());
+    
+    if canvas_result.is_err() {
+        return;
+    }
+    let canvas = canvas_result.unwrap();
 
     let video_width = video.video_width();
     let video_height = video.video_height();
@@ -642,18 +719,21 @@ fn draw_detections_and_tracks(
     canvas.set_width(video_width);
     canvas.set_height(video_height);
 
-    let ctx: CanvasRenderingContext2d = match canvas
+    let ctx_result: Result<CanvasRenderingContext2d, _> = canvas
         .get_context("2d")
         .ok()
         .and_then(|v| v)
-        .and_then(|v| v.dyn_into().ok())
-    {
-        Some(c) => c,
-        None => return,
-    };
+        .ok_or(JsValue::NULL)
+        .and_then(|v| v.dyn_into());
+    
+    if ctx_result.is_err() {
+        return;
+    }
+    let ctx = ctx_result.unwrap();
 
     ctx.clear_rect(0.0, 0.0, video_width as f64, video_height as f64);
 
+    // Draw tracks (tracked faces)
     ctx.set_stroke_style_str("#7b74ff");
     ctx.set_line_width(3.0);
     ctx.set_font("14px sans-serif");
@@ -674,3 +754,4 @@ fn draw_detections_and_tracks(
         let _ = ctx.fill_text(&label, x as f64 + 4.0, text_y as f64);
     }
 }
+

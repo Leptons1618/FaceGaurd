@@ -1,0 +1,43 @@
+--- a/ui/src/main.rs
++++ b/ui/src/main.rs
+@@ -175,8 +175,8 @@
+     let mut tracks = use_signal(|| vec![]);
+     let mut frame_count = use_signal(|| 0);
+     let mut fps = use_signal(|| 0.0);
+-    let tracker = use_signal(|| tracking::Tracker::new(0.4, 3000));
+-    let identity_db = use_signal(|| load_identity_db());
++    let mut tracker = use_signal(|| tracking::Tracker::new(0.4, 3000));
++    let _identity_db = use_signal(|| load_identity_db());
+     let mut event_log = use_signal(|| load_event_log());
+ 
+     use_effect(move || {
+@@ -690,7 +690,7 @@
+     }
+     let document = document.unwrap();
+ 
+-    let video_result: Result<HtmlVideoElement, _> = document
++    let video_result: Result<HtmlVideoElement, JsValue> = document
+         .get_element_by_id(video_id)
+         .ok_or(JsValue::NULL)
+         .and_then(|el| el.dyn_into());
+@@ -700,7 +700,7 @@
+     }
+     let video = video_result.unwrap();
+ 
+-    let canvas_result: Result<HtmlCanvasElement, _> = document
++    let canvas_result: Result<HtmlCanvasElement, JsValue> = document
+         .get_element_by_id(canvas_id)
+         .ok_or(JsValue::NULL)
+         .and_then(|el| el.dyn_into());
+@@ -722,10 +722,9 @@
+     canvas.set_width(video_width);
+     canvas.set_height(video_height);
+ 
+-    let ctx_result: Result<CanvasRenderingContext2d, _> = canvas
++    let ctx_result: Result<CanvasRenderingContext2d, JsValue> = canvas
+         .get_context("2d")
+-        .ok()
+-        .and_then(|v| v)
++        .map_err(|_| JsValue::NULL)?
+         .ok_or(JsValue::NULL)
+         .and_then(|v| v.dyn_into());
