@@ -16,6 +16,12 @@ use web_sys::{
 const IDENTITY_DB_KEY: &str = "faceguard_identities";
 const EVENT_LOG_KEY: &str = "faceguard_events";
 
+macro_rules! log {
+    ($($arg:tt)*) => {
+        web_sys::console::log_1(&format!($($arg)*).into());
+    };
+}
+
 const GLOBAL_STYLE: &str = r#"
     :root {
         color: #e7ecf3;
@@ -24,43 +30,285 @@ const GLOBAL_STYLE: &str = r#"
                      #0d1320;
         font-family: "Space Grotesk", "Manrope", "Inter", system-ui, -apple-system, sans-serif;
     }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
     * { box-sizing: border-box; }
-    body { margin: 0; background: transparent; }
-    .page { max-width: 1100px; margin: 0 auto; padding: 32px 20px 48px; }
-    .hero { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 24px; }
-    .hero h1 { margin: 0; font-size: 28px; letter-spacing: -0.5px; }
-    .hero p { margin: 4px 0 0; color: #9fb3c8; }
-    .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 18px 18px 16px; backdrop-filter: blur(8px); box-shadow: 0 20px 60px rgba(0,0,0,0.35); }
-    .grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 18px; }
-    .video-card video { width: 100%; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); background: #05070d; object-fit: cover; min-height: 320px; }
-    .section-title { display: flex; align-items: center; justify-content: space-between; margin: 0 0 10px; }
-    .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,0.08); color: #b9c8d8; font-size: 13px; }
-    .list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
-    .list li { padding: 10px 12px; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; background: rgba(255,255,255,0.02); color: #dbe5f2; }
+    body { background: transparent; }
+    
+    .container { 
+        display: flex; 
+        flex-direction: column; 
+        height: 100vh; 
+        width: 100vw; 
+        overflow: hidden;
+    }
+    
+    nav { 
+        display: flex; 
+        gap: 4px; 
+        padding: 12px 20px; 
+        border-bottom: 1px solid rgba(255,255,255,0.1); 
+        background: rgba(13, 19, 32, 0.9);
+        flex-shrink: 0;
+        z-index: 100;
+    }
+    
+    nav a { 
+        padding: 10px 18px; 
+        border-radius: 10px; 
+        text-decoration: none; 
+        color: #9fb3c8; 
+        font-weight: 500; 
+        transition: all 0.2s;
+        cursor: pointer;
+    }
+    
+    nav a:hover { 
+        background: rgba(255,255,255,0.08); 
+        color: #e7ecf3; 
+    }
+    
+    nav a.active { 
+        background: rgba(63,181,255,0.15); 
+        color: #3fb5ff; 
+        border: 1px solid rgba(63,181,255,0.3);
+    }
+    
+    .content { 
+        flex: 1; 
+        overflow: hidden; 
+        display: flex;
+    }
+    
+    .page { 
+        flex: 1; 
+        overflow: auto; 
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    
+    .dashboard-grid {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 12px;
+        height: 100%;
+        min-height: 0;
+    }
+    
+    .video-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-height: 0;
+    }
+    
+    .card { 
+        background: rgba(255,255,255,0.04); 
+        border: 1px solid rgba(255,255,255,0.08); 
+        border-radius: 16px; 
+        padding: 16px; 
+        backdrop-filter: blur(8px); 
+        box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+    
+    .video-card { 
+        flex: 1;
+        position: relative;
+    }
+    
+    .video-card video { 
+        width: 100%; 
+        height: 100%;
+        border-radius: 12px; 
+        border: 1px solid rgba(255,255,255,0.1); 
+        background: #05070d; 
+        object-fit: cover;
+    }
+    
+    .video-container { 
+        position: relative; 
+        flex: 1;
+        overflow: hidden;
+    }
+    
+    .video-overlay { 
+        position: absolute; 
+        top: 0; 
+        left: 0; 
+        pointer-events: none; 
+    }
+    
+    .section-title { 
+        display: flex; 
+        align-items: center; 
+        justify-content: space-between; 
+        margin: 0; 
+        font-size: 14px;
+        font-weight: 600;
+        color: #e7ecf3;
+    }
+    
+    .pill { 
+        display: inline-flex; 
+        align-items: center; 
+        gap: 8px; 
+        padding: 6px 10px; 
+        border-radius: 999px; 
+        background: rgba(255,255,255,0.08); 
+        color: #b9c8d8; 
+        font-size: 12px;
+    }
+    
+    .pill.live { background: rgba(76, 175, 80, 0.2); color: #4caf50; }
+    .pill.warning { background: rgba(255, 152, 0, 0.2); color: #ffa500; }
+    .pill.error { background: rgba(244, 67, 54, 0.2); color: #f44336; }
+    
+    .list { 
+        list-style: none; 
+        padding: 0; 
+        margin: 0; 
+        display: grid; 
+        gap: 6px;
+        max-height: 200px;
+        overflow-y: auto;
+    }
+    
+    .list li { 
+        padding: 8px 10px; 
+        border: 1px solid rgba(255,255,255,0.08); 
+        border-radius: 10px; 
+        background: rgba(255,255,255,0.02); 
+        color: #dbe5f2;
+        font-size: 13px;
+    }
+    
     .muted { color: #94a9c3; }
-    .events { margin-top: 22px; }
-    .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
-    select { background: rgba(255,255,255,0.08); color: #e7ecf3; border: 1px solid rgba(255,255,255,0.14); border-radius: 10px; padding: 8px 12px; }
-    button { background: linear-gradient(135deg, #3fb5ff, #7b74ff); border: none; color: white; padding: 10px 14px; border-radius: 12px; cursor: pointer; font-weight: 600; letter-spacing: 0.1px; }
-    button.secondary { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14); }
-    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 10px; margin-top: 6px; }
-    .stat { padding: 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); }
-    .stat span { display: block; color: #9fb3c8; font-size: 13px; }
-    .stat strong { font-size: 22px; }
-    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
-    nav { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px; }
-    nav a { padding: 10px 18px; border-radius: 10px; text-decoration: none; color: #9fb3c8; font-weight: 500; transition: all 0.2s; }
-    nav a:hover { background: rgba(255,255,255,0.08); color: #e7ecf3; }
-    nav a.active { background: rgba(63,181,255,0.15); color: #3fb5ff; border: 1px solid rgba(63,181,255,0.3); }
-    .video-container { position: relative; }
-    .video-overlay { position: absolute; top: 0; left: 0; pointer-events: none; }
+    
+    .stats { 
+        display: grid; 
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+    }
+    
+    .stat { 
+        padding: 10px; 
+        border-radius: 10px; 
+        border: 1px solid rgba(255,255,255,0.08); 
+        background: rgba(255,255,255,0.03);
+        text-align: center;
+    }
+    
+    .stat span { 
+        display: block; 
+        color: #9fb3c8; 
+        font-size: 12px;
+    }
+    
+    .stat strong { 
+        font-size: 18px;
+        display: block;
+    }
+    
+    .controls { 
+        display: flex; 
+        flex-wrap: wrap; 
+        gap: 8px; 
+        align-items: center;
+    }
+    
+    button { 
+        background: linear-gradient(135deg, #3fb5ff, #7b74ff); 
+        border: none; 
+        color: white; 
+        padding: 8px 12px; 
+        border-radius: 10px; 
+        cursor: pointer; 
+        font-weight: 600; 
+        font-size: 13px;
+        transition: all 0.2s;
+    }
+    
+    button:hover { 
+        opacity: 0.9; 
+        transform: translateY(-1px);
+    }
+    
+    button.secondary { 
+        background: rgba(255,255,255,0.08); 
+        border: 1px solid rgba(255,255,255,0.14); 
+        color: #e7ecf3;
+    }
+    
+    input[type="text"],
+    input[type="range"],
+    select {
+        background: rgba(255,255,255,0.08);
+        color: #e7ecf3;
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 13px;
+    }
+    
+    input[type="text"]::placeholder {
+        color: #6b8fb3;
+    }
+    
+    .registration-form {
+        max-width: 500px;
+    }
+    
+    .form-group {
+        margin-bottom: 16px;
+    }
+    
+    .form-group label {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 500;
+        font-size: 14px;
+    }
+    
+    .form-group input,
+    .form-group textarea {
+        width: 100%;
+    }
+    
+    textarea {
+        background: rgba(255,255,255,0.08);
+        color: #e7ecf3;
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-family: inherit;
+        min-height: 80px;
+        resize: vertical;
+    }
+    
+    .capture-preview {
+        width: 100%;
+        max-width: 300px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.1);
+        margin: 12px 0;
+    }
+    
+    @media (max-width: 900px) { 
+        .dashboard-grid { 
+            grid-template-columns: 1fr; 
+        } 
+    }
 "#;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Page {
     Dashboard,
-    LiveFeed,
     Events,
+    Register,
     Settings,
 }
 
@@ -73,7 +321,7 @@ fn app() -> Element {
 
     rsx! {
         style { "{GLOBAL_STYLE}" }
-        div { class: "page",
+        div { class: "container",
             nav {
                 a {
                     class: if current_page() == Page::Dashboard { "active" } else { "" },
@@ -81,9 +329,9 @@ fn app() -> Element {
                     "Dashboard"
                 }
                 a {
-                    class: if current_page() == Page::LiveFeed { "active" } else { "" },
-                    onclick: move |_| current_page.set(Page::LiveFeed),
-                    "Live Feed"
+                    class: if current_page() == Page::Register { "active" } else { "" },
+                    onclick: move |_| current_page.set(Page::Register),
+                    "Register"
                 }
                 a {
                     class: if current_page() == Page::Events { "active" } else { "" },
@@ -97,11 +345,13 @@ fn app() -> Element {
                 }
             }
             
-            match current_page() {
-                Page::Dashboard => rsx! { Dashboard {} },
-                Page::LiveFeed => rsx! { LiveFeed {} },
-                Page::Events => rsx! { EventsPage {} },
-                Page::Settings => rsx! { Settings {} },
+            div { class: "content",
+                match current_page() {
+                    Page::Dashboard => rsx! { Dashboard {} },
+                    Page::Events => rsx! { EventsPage {} },
+                    Page::Register => rsx! { RegisterPage {} },
+                    Page::Settings => rsx! { Settings {} },
+                }
             }
         }
     }
@@ -112,32 +362,218 @@ fn Dashboard() -> Element {
     let identity_db = load_identity_db();
     let event_log = load_event_log();
     let identities = identity_db.get_all();
-    let events_data = event_log.get_recent(50);
+    let events_data = event_log.get_recent(20);
+
+    let mut detections = use_signal(|| vec![]);
+    let mut tracks = use_signal(|| vec![]);
+    let mut frame_count = use_signal(|| 0);
+    let mut fps = use_signal(|| 0.0);
+    let mut faces_detected = use_signal(|| 0);
+    let mut last_time = use_signal(|| js_sys::Date::now());
+    let mut tracker = use_signal(|| tracking::Tracker::new(0.4, 3000));
+    let mut _interval_handle = use_signal::<Option<Interval>>(|| None);
+    let mut camera_ready = use_signal(|| false);
+
+    // Start camera
+    use_effect(move || {
+        spawn_local(async move {
+            match start_camera("camera-feed").await {
+                Ok(_) => {
+                    log!("✓ Camera started successfully");
+                    camera_ready.set(true);
+                }
+                Err(err) => {
+                    log!("✗ Camera error: {:?}", err);
+                }
+            }
+        });
+    });
+
+    // Frame processing loop - only start after camera is ready
+    use_effect(move || {
+        if !camera_ready() {
+            return;
+        }
+
+        log!("Starting frame processing loop...");
+
+        let interval = Interval::new(100, move || {
+            frame_count.set(frame_count() + 1);
+
+            let now = js_sys::Date::now();
+            let mut last = last_time();
+            
+            // Calculate FPS
+            let delta = (now - last) / 1000.0;
+            if delta > 0.0 && delta < 1.0 {
+                fps.set(1.0 / delta);
+            }
+            last_time.set(now);
+
+            let current_count = frame_count();
+            
+            // Try to detect faces from video
+            match detect_faces_from_video("camera-feed", "temp-canvas") {
+                Some(dets) => {
+                    if current_count % 5 == 0 {
+                        log!("[Frame {}] ✓ Got image data, detected {} raw faces", current_count, dets.len());
+                    }
+
+                    let filtered_dets = detection::apply_nms(dets, 0.3);  // Lower IOU threshold = more aggressive filtering
+                    if current_count % 5 == 0 {
+                        log!("[Frame {}] After NMS (IOU=0.3): {} faces", current_count, filtered_dets.len());
+                    }
+
+                    let timestamp = now as u64;
+                    let mut t = tracker.write();
+                    let active_tracks = t.update(filtered_dets.clone(), timestamp);
+                    drop(t);
+
+                    faces_detected.set(filtered_dets.len());
+                    detections.set(filtered_dets);
+                    tracks.set(active_tracks.clone());
+
+                    // Log unknown face events
+                    let identity_db = load_identity_db();
+                    let mut event_log = load_event_log();
+                    
+                    for track in &active_tracks {
+                        // Only log tracks that are currently being detected
+                        if timestamp - track.last_seen < 1000 {  // Within last second
+                            // Check if we already logged this track recently
+                            let already_logged = event_log.get_all().iter().any(|e| {
+                                e.event_type == events::EventType::UnknownFace && 
+                                e.track_id == Some(track.track_id) &&
+                                (js_sys::Date::now() as u64 - e.timestamp) < 5000  // Within last 5 seconds
+                            });
+                            
+                            if !already_logged {
+                                event_log.add_event(
+                                    events::EventType::UnknownFace,
+                                    "Unknown".to_string(),
+                                    track.detection.confidence,
+                                    Some(track.track_id),
+                                );
+                                log!("Event: Unknown face detected (Track #{})", track.track_id);
+                            }
+                        }
+                    }
+                    
+                    save_event_log(&event_log);
+
+                    draw_detections_and_tracks("camera-feed", "overlay-canvas", &tracks());
+                }
+                None => {
+                    if current_count % 30 == 0 {
+                        log!("[Frame {}] ✗ Failed to read video frame or extract image data", current_count);
+                    }
+                }
+            }
+        });
+
+        _interval_handle.set(Some(interval));
+        log!("Frame processing loop started");
+    });
 
     rsx! {
-        header { class: "hero",
-            div {
-                h1 { "FaceGuard — Dashboard" }
-                p { "System overview and quick stats" }
-            }
-            span { class: "pill", "Live" }
-        }
-
-        div { class: "stats",
-            div { class: "stat", span { "Identities" } strong { "{identities.len()}" } }
-            div { class: "stat", span { "Total Events" } strong { "{event_log.get_all().len()}" } }
-            div { class: "stat", span { "Recent Events" } strong { "{events_data.len()}" } }
-            div { class: "stat", span { "System" } strong { "Active" } }
-        }
-
-        section { class: "card", style: "margin-top: 20px;",
-            h3 { "Recent Identities" }
-            ul { class: "list",
-                for ident in identities.iter() {
-                    li { "{ident.name} · ID {ident.id}" }
+        div { class: "page",
+            div { class: "dashboard-grid",
+                div { class: "video-panel",
+                    div { class: "card video-card",
+                        div { class: "section-title",
+                            h3 { "Live Feed" }
+                            span { class: "pill live", "● Active" }
+                        }
+                        div { class: "video-container",
+                            video {
+                                id: "camera-feed",
+                                autoplay: true,
+                                playsinline: true,
+                                muted: true,
+                                controls: false,
+                                style: "width: 100%; height: 100%; border-radius: 12px; object-fit: cover;"
+                            }
+                            canvas {
+                                id: "overlay-canvas",
+                                class: "video-overlay",
+                            }
+                            canvas {
+                                id: "temp-canvas",
+                                style: "display: none;",
+                            }
+                        }
+                    }
                 }
-                if identities.is_empty() {
-                    li { class: "muted", "No identities detected yet" }
+                
+                div { class: "card",
+                    div { class: "section-title",
+                        h3 { "System Status" }
+                        span { 
+                            class: if camera_ready() { 
+                                if faces_detected() > 0 { "pill live" } else { "pill warning" }
+                            } else { 
+                                "pill error" 
+                            },
+                            if !camera_ready() { 
+                                "⏳ Starting camera..."
+                            } else if faces_detected() > 0 { 
+                                "✓ Detecting" 
+                            } else { 
+                                "⚠ No Faces" 
+                            }
+                        }
+                    }
+                    
+                    div { class: "stats",
+                        div { class: "stat", 
+                            span { "Frames" }
+                            strong { "{frame_count}" }
+                        }
+                        div { class: "stat", 
+                            span { "FPS" }
+                            strong { "{fps:.1}" }
+                        }
+                        div { class: "stat", 
+                            span { "Faces" }
+                            strong { "{faces_detected()}" }
+                        }
+                        div { class: "stat", 
+                            span { "Tracks" }
+                            strong { "{tracks().len()}" }
+                        }
+                    }
+                    
+                    h4 { style: "margin-top: 16px; margin-bottom: 8px;", "Tracked Faces" }
+                    ul { class: "list",
+                        for track in tracks().iter() {
+                            li {
+                                "#{track.track_id} · {track.frames_tracked}f · {(track.detection.confidence*100.0):.0}%"
+                            }
+                        }
+                        if tracks().is_empty() {
+                            li { class: "muted", "No active tracks" }
+                        }
+                    }
+                    
+                    h4 { style: "margin-top: 12px; margin-bottom: 8px;", "Identities" }
+                    ul { class: "list",
+                        for ident in identities.iter().take(5) {
+                            li { "{ident.name}" }
+                        }
+                        if identities.is_empty() {
+                            li { class: "muted", "No identities registered" }
+                        }
+                    }
+                    
+                    h4 { style: "margin-top: 12px; margin-bottom: 8px;", "Recent Events" }
+                    ul { class: "list",
+                        for evt in events_data.iter().take(5) {
+                            li { "#{evt.id}" }
+                        }
+                        if events_data.is_empty() {
+                            li { class: "muted", "No events logged" }
+                        }
+                    }
                 }
             }
         }
@@ -145,97 +581,89 @@ fn Dashboard() -> Element {
 }
 
 #[component]
-fn LiveFeed() -> Element {
-    let mut detections = use_signal(|| vec![]);
-    let mut tracks = use_signal(|| vec![]);
-    let mut frame_count = use_signal(|| 0);
-    let mut fps = use_signal(|| 0.0);
+fn RegisterPage() -> Element {
+    let mut name = use_signal(|| String::new());
+    let mut notes = use_signal(|| String::new());
+    let mut captured_image = use_signal::<Option<String>>(|| None);
+    let mut capture_status = use_signal(|| String::from("Ready"));
 
-    use_effect(move || {
-        spawn_local(async move {
-            if let Err(err) = start_camera("camera-feed").await {
-                web_sys::console::error_1(&err);
-            }
-        });
+    let capture_face = {
+        move |_| {
+            spawn_local(async move {
+                if let Some(image_data) = capture_face_from_video("camera-feed", "capture-canvas") {
+                    captured_image.set(Some(image_data));
+                    capture_status.set(String::from("✓ Face captured"));
+                    log!("Face captured successfully");
+                } else {
+                    capture_status.set(String::from("✗ Capture failed"));
+                    log!("Failed to capture face");
+                }
+            });
+        }
+    };
 
-        let mut tracker = tracking::Tracker::new(0.4, 3000);
-        let last_time = js_sys::Date::now();
-        
-        let _interval = Interval::new(100, move || {
-            frame_count.set(frame_count() + 1);
-            
-            // Calculate FPS
-            let now = js_sys::Date::now();
-            let delta = (now - last_time) / 1000.0;
-            if delta > 0.0 {
-                fps.set(1.0 / delta);
-            }
-            
-            // Process frame and detect faces
-            if let Some(dets) = detect_faces_from_video("camera-feed", "temp-canvas") {
-                // Apply NMS to remove overlapping detections
-                let filtered_dets = detection::apply_nms(dets, 0.4);
-                
-                // Update tracker
-                let timestamp = now as u64;
-                let active_tracks = tracker.update(filtered_dets.clone(), timestamp);
-                
-                // Store results
-                detections.set(filtered_dets);
-                tracks.set(active_tracks);
+    let save_identity = {
+        move |_| {
+            let n = name().trim().to_string();
+            if n.is_empty() {
+                capture_status.set(String::from("✗ Name required"));
+                return;
             }
             
-            // Draw overlays
-            draw_detections_and_tracks("camera-feed", "overlay-canvas", &detections(), &tracks());
-        });
-    });
-
-    camera::ingest();
+            let mut db = load_identity_db();
+            db.add_identity(n.clone(), None);
+            save_identity_db(&db);
+            
+            log!("Saved identity: {}", n);
+            capture_status.set(String::from("✓ Identity saved!"));
+            name.set(String::new());
+            notes.set(String::new());
+            captured_image.set(None);
+        }
+    };
 
     rsx! {
-        header { class: "hero",
-            div {
-                h1 { "Live Feed" }
-                p { "Real-time detection, tracking, and recognition · {fps():.1} FPS" }
-            }
-            span { class: "pill", "Frame: {frame_count} · {tracks().len()} tracks" }
-        }
-
-        section { class: "card video-card",
-            div { class: "section-title",
-                h2 { "Camera Feed" }
-                span { class: "pill", "{detections().len()} faces · {tracks().len()} tracked" }
-            }
-            div { class: "video-container",
-                video {
-                    id: "camera-feed",
-                    autoplay: true,
-                    playsinline: true,
-                    muted: true,
-                    controls: false,
-                    width: "100%",
-                }
-                canvas {
-                    id: "overlay-canvas",
-                    class: "video-overlay",
-                }
-                canvas {
-                    id: "temp-canvas",
-                    style: "display: none;",
-                }
-            }
-        }
-
-        section { class: "card", style: "margin-top: 20px;",
-            h3 { "Active Tracks" }
-            ul { class: "list",
-                for track in tracks().iter() {
-                    li {
-                        "Track #{track.track_id} · {track.frames_tracked} frames · conf {track.detection.confidence:.2}"
+        div { class: "page",
+            div { class: "card registration-form",
+                h2 { "Register New Identity" }
+                
+                div { class: "form-group",
+                    label { "Person Name *" }
+                    input {
+                        r#type: "text",
+                        placeholder: "Enter full name",
+                        value: "{name()}",
+                        oninput: move |e| name.set(e.value()),
                     }
                 }
-                if tracks().is_empty() {
-                    li { class: "muted", "No active tracks" }
+                
+                div { class: "form-group",
+                    label { "Capture Face" }
+                    p { class: "muted", style: "margin: 0 0 8px 0; font-size: 13px;", 
+                        "Make sure your face is clearly visible in the video feed"
+                    }
+                    button { onclick: capture_face, "Capture Face" }
+                    if let Some(img) = captured_image() {
+                        img {
+                            src: "{img}",
+                            class: "capture-preview",
+                            alt: "Captured face"
+                        }
+                    }
+                }
+                
+                div { class: "form-group",
+                    label { "Notes (Optional)" }
+                    textarea {
+                        placeholder: "Additional information",
+                        value: "{notes()}",
+                        oninput: move |e| notes.set(e.value()),
+                    }
+                }
+                
+                div { class: "controls",
+                    button { onclick: save_identity, "Save Identity" }
+                    span { class: "pill", "{capture_status()}" }
                 }
             }
         }
@@ -247,64 +675,46 @@ enum EventFilter {
     All,
     Alerts,
     Unknowns,
-    Blacklisted,
 }
 
 #[component]
 fn EventsPage() -> Element {
-    let filter = use_signal(|| EventFilter::All);
+    let mut filter = use_signal(|| EventFilter::All);
     let event_log = load_event_log();
     let events_data = event_log.get_all();
 
-    let export_csv = {
-        let filter = filter.clone();
-        let events_data = events_data.clone();
-        move |_| export_events_csv(filter(), &events_data)
-    };
-
-    let export_json = {
-        let filter = filter.clone();
-        let events_data = events_data.clone();
-        move |_| export_events_json(filter(), &events_data)
-    };
-
     rsx! {
-        header { class: "hero",
-            div {
-                h1 { "Events" }
-                p { "Filter, preview, and export security events" }
-            }
-        }
-
-        section { class: "card",
-            div { class: "controls",
-                label { "Filter:" }
-                select {
-                    value: format!("{:?}", filter()),
-                    onchange: move |e| {
-                        let mut f = filter;
-                        match e.value().as_str() {
-                            "All" => f.set(EventFilter::All),
-                            "Alerts" => f.set(EventFilter::Alerts),
-                            "Unknowns" => f.set(EventFilter::Unknowns),
-                            "Blacklisted" => f.set(EventFilter::Blacklisted),
-                            _ => {}
+        div { class: "page",
+            div { class: "card",
+                h2 { "Security Events" }
+                
+                div { class: "controls",
+                    label { "Filter:" }
+                    select {
+                        value: format!("{:?}", filter()),
+                        onchange: move |e| {
+                            match e.value().as_str() {
+                                "All" => filter.set(EventFilter::All),
+                                "Alerts" => filter.set(EventFilter::Alerts),
+                                "Unknowns" => filter.set(EventFilter::Unknowns),
+                                _ => {}
+                            }
+                        },
+                        option { value: "All", selected: filter() == EventFilter::All, "All Events" }
+                        option { value: "Alerts", selected: filter() == EventFilter::Alerts, "Alerts" }
+                        option { value: "Unknowns", selected: filter() == EventFilter::Unknowns, "Unknown Faces" }
+                    }
+                }
+                
+                ul { class: "list",
+                    for event in filter_events(filter(), &events_data).iter().take(50) {
+                        li { 
+                            "#{event.id} · {event.name} · conf {event.confidence:.2} · {event.timestamp}"
                         }
-                    },
-                    option { value: "All", selected: filter() == EventFilter::All, "All" }
-                    option { value: "Alerts", selected: filter() == EventFilter::Alerts, "Alerts" }
-                    option { value: "Unknowns", selected: filter() == EventFilter::Unknowns, "Unknowns" }
-                    option { value: "Blacklisted", selected: filter() == EventFilter::Blacklisted, "Blacklisted" }
-                }
-                button { onclick: export_csv, "Export CSV" }
-                button { class: "secondary", onclick: export_json, "Export JSON" }
-            }
-            ul { class: "list",
-                for event in filter_events(filter(), &events_data) {
-                    li { "#{event.id} · {event.name} · conf {event.confidence:.2}" }
-                }
-                if filter_events(filter(), &events_data).is_empty() {
-                    li { class: "muted", "No events for this filter" }
+                    }
+                    if filter_events(filter(), &events_data).is_empty() {
+                        li { class: "muted", "No events for this filter" }
+                    }
                 }
             }
         }
@@ -313,77 +723,43 @@ fn EventsPage() -> Element {
 
 #[component]
 fn Settings() -> Element {
-    let mut detection_threshold = use_signal(|| 0.7);
-    let mut recognition_threshold = use_signal(|| 0.85);
-    let mut enable_tracking = use_signal(|| true);
-
+    let db = load_identity_db();
+    let log = load_event_log();
+    let identity_count = db.get_all().len();
+    let event_count = log.get_all().len();
+    
     rsx! {
-        header { class: "hero",
-            div {
-                h1 { "Settings" }
-                p { "Configure detection, recognition, and system parameters" }
-            }
-        }
-
-        section { class: "card",
-            h3 { "Detection Settings" }
-            div { style: "margin: 16px 0;",
-                label { "Detection Confidence Threshold: {detection_threshold():.2}" }
-                input {
-                    r#type: "range",
-                    min: "0",
-                    max: "1",
-                    step: "0.05",
-                    value: "{detection_threshold()}",
-                    oninput: move |e| {
-                        if let Ok(val) = e.value().parse::<f64>() {
-                            detection_threshold.set(val);
-                        }
-                    },
-                    style: "width: 100%; margin-top: 8px;"
+        div { class: "page",
+            div { class: "card",
+                h2 { "Settings & System Info" }
+                
+                h3 { "System Information" }
+                ul { class: "list",
+                    li { "Platform: WebAssembly (Dioxus)" }
+                    li { "Version: 0.1.0-dev" }
+                    li { "Storage: LocalStorage (JSON)" }
+                    li { "Detection: Brightness-based (placeholder)" }
+                    li { "Build Date: 2026-01-01" }
                 }
-            }
-            div { style: "margin: 16px 0;",
-                label { "Recognition Confidence Threshold: {recognition_threshold():.2}" }
-                input {
-                    r#type: "range",
-                    min: "0",
-                    max: "1",
-                    step: "0.05",
-                    value: "{recognition_threshold()}",
-                    oninput: move |e| {
-                        if let Ok(val) = e.value().parse::<f64>() {
-                            recognition_threshold.set(val);
-                        }
-                    },
-                    style: "width: 100%; margin-top: 8px;"
+                
+                h3 { style: "margin-top: 16px;", "Database Status" }
+                ul { class: "list",
+                    li { "Identities: {identity_count}" }
+                    li { "Events Logged: {event_count}" }
                 }
-            }
-        }
-
-        section { class: "card", style: "margin-top: 20px;",
-            h3 { "Tracking Settings" }
-            div { style: "margin: 16px 0;",
-                label {
-                    input {
-                        r#type: "checkbox",
-                        checked: enable_tracking(),
-                        onchange: move |e| {
-                            enable_tracking.set(e.checked());
+                
+                h3 { style: "margin-top: 16px;", "Actions" }
+                div { class: "controls",
+                    button { 
+                        onclick: move |_| {
+                            let _ = LocalStorage::delete(IDENTITY_DB_KEY);
+                            let _ = LocalStorage::delete(EVENT_LOG_KEY);
+                            log!("Database cleared");
                         },
-                        style: "margin-right: 8px;"
+                        class: "secondary",
+                        "Clear All Data"
                     }
-                    "Enable face tracking"
                 }
-            }
-        }
-
-        section { class: "card", style: "margin-top: 20px;",
-            h3 { "System Info" }
-            ul { class: "list",
-                li { "Platform: WASM" }
-                li { "Version: 0.1.0" }
-                li { "Core Engine: FaceGuard" }
             }
         }
     }
@@ -396,65 +772,41 @@ fn filter_events(filter: EventFilter, events: &[events::FaceEvent]) -> Vec<event
         .filter(|event| match filter {
             EventFilter::All => true,
             EventFilter::Alerts => {
-                matches!(event.event_type, events::EventType::Blacklisted | events::EventType::AfterHours)
-                    || event.confidence < 0.4
+                event.confidence < 0.4
+                    || matches!(event.event_type, events::EventType::Blacklisted | events::EventType::AfterHours)
             }
             EventFilter::Unknowns => event.event_type == events::EventType::UnknownFace,
-            EventFilter::Blacklisted => event.event_type == events::EventType::Blacklisted,
         })
         .collect()
-}
-
-fn export_events_csv(filter: EventFilter, events: &[events::FaceEvent]) {
-    let event_vec = filter_events(filter, events);
-    let mut csv = String::from("id,name,confidence,timestamp\n");
-    for event in event_vec.iter() {
-        csv.push_str(&format!("{},{},{},{}\n", event.id, event.name, event.confidence, event.timestamp));
-    }
-    download_blob(&csv, "events.csv", "text/csv");
-}
-
-fn export_events_json(filter: EventFilter, events: &[events::FaceEvent]) {
-    if let Ok(json) = serde_json::to_string(&filter_events(filter, events)) {
-        download_blob(&json, "events.json", "application/json");
-    }
-}
-
-fn download_blob(content: &str, filename: &str, _mime: &str) {
-    if let Ok(blob) = web_sys::Blob::new_with_str_sequence(&Array::of1(&JsValue::from_str(content))) {
-        if let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) {
-            if let Some(window) = web_sys::window() {
-                if let Some(document) = window.document() {
-                    if let Ok(a) = document.create_element("a") {
-                        let _ = a.set_attribute("href", &url);
-                        let _ = a.set_attribute("download", filename);
-                        if let Some(body) = document.body() {
-                            let _ = body.append_child(&a);
-                            if let Some(a_html) = a.dyn_ref::<HtmlElement>() {
-                                a_html.click();
-                            }
-                            let _ = body.remove_child(&a);
-                        }
-                    }
-                }
-            }
-            let _ = web_sys::Url::revoke_object_url(&url);
-        }
-    }
 }
 
 // Persistence helpers
 fn load_identity_db() -> recognition::IdentityDatabase {
     LocalStorage::get(IDENTITY_DB_KEY).unwrap_or_else(|_| {
-        let mut db = recognition::IdentityDatabase::new();
-        // Add some demo identities
-        db.add_identity("Demo User".to_string(), None);
-        db
+        log!("Creating new identity database");
+        recognition::IdentityDatabase::new()
     })
 }
 
+fn save_identity_db(db: &recognition::IdentityDatabase) {
+    if let Err(e) = LocalStorage::set(IDENTITY_DB_KEY, db) {
+        log!("Error saving identity database: {:?}", e);
+    } else {
+        log!("Identity database saved");
+    }
+}
+
 fn load_event_log() -> events::EventLog {
-    LocalStorage::get(EVENT_LOG_KEY).unwrap_or_else(|_| events::EventLog::new(1000))
+    LocalStorage::get(EVENT_LOG_KEY).unwrap_or_else(|_| {
+        log!("Creating new event log");
+        events::EventLog::new(1000)
+    })
+}
+
+fn save_event_log(event_log: &events::EventLog) {
+    if let Err(e) = LocalStorage::set(EVENT_LOG_KEY, event_log) {
+        log!("Failed to save event log: {:?}", e);
+    }
 }
 
 async fn start_camera(video_id: &str) -> Result<(), JsValue> {
@@ -484,14 +836,64 @@ async fn start_camera(video_id: &str) -> Result<(), JsValue> {
     video.set_src_object(Some(&media_stream));
     video.set_muted(true);
     let _ = video.play();
+    log!("Camera started");
     Ok(())
 }
 
-/// Detect faces from video element using simple edge detection
 fn detect_faces_from_video(
     video_id: &str,
     canvas_id: &str,
 ) -> Option<Vec<detection::FaceDetection>> {
+    let window = web_sys::window()?;
+    let document = window.document()?;
+
+    let video: HtmlVideoElement = document.get_element_by_id(video_id)?.dyn_into().ok()?;
+    let canvas: HtmlCanvasElement = document.get_element_by_id(canvas_id)?.dyn_into().ok()?;
+
+    // Check if video is ready
+    let video_width = video.video_width();
+    let video_height = video.video_height();
+    
+    if video_width == 0 || video_height == 0 {
+        log!("⚠ Video not ready: {}x{}", video_width, video_height);
+        return None;
+    }
+
+    canvas.set_width(video_width);
+    canvas.set_height(video_height);
+
+    let ctx: CanvasRenderingContext2d = canvas
+        .get_context("2d")
+        .ok()??
+        .dyn_into()
+        .ok()?;
+
+    // Draw video frame to canvas
+    if ctx.draw_image_with_html_video_element(&video, 0.0, 0.0).is_err() {
+        log!("✗ Failed to draw image to canvas");
+        return None;
+    }
+
+    // Extract image data
+    let image_data = match ctx.get_image_data(0.0, 0.0, video_width as f64, video_height as f64) {
+        Ok(data) => data,
+        Err(_) => {
+            log!("✗ Failed to get image data");
+            return None;
+        }
+    };
+
+    log!("✓ Extracted {}x{} image data, {} bytes", video_width, video_height, image_data.data().len());
+
+    let detections = simple_face_detection(&image_data, video_width, video_height);
+
+    Some(detections)
+}
+
+fn capture_face_from_video(
+    video_id: &str,
+    canvas_id: &str,
+) -> Option<String> {
     let window = web_sys::window()?;
     let document = window.document()?;
 
@@ -516,16 +918,9 @@ fn detect_faces_from_video(
 
     ctx.draw_image_with_html_video_element(&video, 0.0, 0.0).ok()?;
 
-    let image_data = ctx
-        .get_image_data(0.0, 0.0, video_width as f64, video_height as f64)
-        .ok()?;
-
-    let detections = simple_face_detection(&image_data, video_width, video_height);
-
-    Some(detections)
+    canvas.to_data_url().ok()
 }
 
-/// Simple brightness-based face detection (placeholder for real ML model)
 fn simple_face_detection(
     image_data: &ImageData,
     width: u32,
@@ -535,48 +930,163 @@ fn simple_face_detection(
     let mut detections = Vec::new();
     let mut detection_id = 1;
 
-    let grid_size = 64;
-    let step_x = width / grid_size;
-    let step_y = height / grid_size;
+    let grid_size = 8;  // Coarser grid for larger region detection
+    let step_x = (width / grid_size).max(1);
+    let step_y = (height / grid_size).max(1);
+
+    log!("Detection: scanning {}x{} grid ({}x{} pixels per cell) for edge density", grid_size, grid_size, step_x, step_y);
+
+    let mut edge_cells = Vec::new();
+    let mut max_density = 0.0_f32;
+    let mut densities = Vec::new();
 
     for gy in 0..grid_size {
         for gx in 0..grid_size {
-            let x = (gx * step_x) as f32;
-            let y = (gy * step_y) as f32;
-            let w = step_x as f32;
-            let h = step_y as f32;
+            let x = (gx * step_x) as u32;
+            let y = (gy * step_y) as u32;
+            let w = step_x;
+            let h = step_y;
 
-            let brightness = sample_brightness(&data, x as u32, y as u32, w as u32, h as u32, width);
+            // Calculate edge density (how many high-contrast transitions)
+            let edge_density = calculate_edge_density(&data, x, y, w, h, width);
+            densities.push(edge_density);
+            max_density = max_density.max(edge_density);
+            
+            // Faces have features (eyes, nose, mouth) = high edge density
+            // Uniform areas (wall, plain background) = low edge density
+            if edge_density > 0.04 {  // Lowered from 0.08
+                edge_cells.push((gx, gy, edge_density));
+            }
+        }
+    }
 
-            if brightness > 0.3 && brightness < 0.7 {
-                if (w / h - 1.0).abs() < 0.5 {
-                    let confidence = 1.0 - ((brightness - 0.5).abs() * 2.0);
-                    
-                    if confidence > 0.6 {
-                        detections.push(detection::FaceDetection::new(
-                            detection_id,
-                            x,
-                            y,
-                            w,
-                            h,
-                            confidence,
-                        ));
-                        detection_id += 1;
+    let avg_density = if !densities.is_empty() { densities.iter().sum::<f32>() / densities.len() as f32 } else { 0.0 };
+    log!("Detection: found {} cells with edge density > 0.04 (avg={:.3}, max={:.3})", edge_cells.len(), avg_density, max_density);
+
+    // Group connected high-edge cells into face regions
+    let mut visited = std::collections::HashSet::new();
+    
+    for (gx, gy, density) in edge_cells.iter() {
+        if visited.contains(&(*gx, *gy)) {
+            continue;
+        }
+
+        // Flood fill to find connected region
+        let mut region = Vec::new();
+        let mut queue = vec![(*gx, *gy)];
+        
+        while let Some((cx, cy)) = queue.pop() {
+            if visited.contains(&(cx, cy)) || cx >= grid_size || cy >= grid_size {
+                continue;
+            }
+            visited.insert((cx, cy));
+            region.push((cx, cy));
+
+            // Check 4 neighbors
+            for (dx, dy) in &[(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let nx = (cx as i32 + dx) as u32;
+                let ny = (cy as i32 + dy) as u32;
+                if nx < grid_size && ny < grid_size && !visited.contains(&(nx, ny)) {
+                    // Check if neighbor is also high edge
+                    if edge_cells.iter().any(|(gx, gy, _)| *gx == nx && *gy == ny) {
+                        queue.push((nx, ny));
                     }
+                }
+            }
+        }
+
+        // If region is large enough, treat as a face
+        if region.len() >= 2 {
+            let min_x = region.iter().map(|(x, _)| x).min().unwrap();
+            let min_y = region.iter().map(|(_, y)| y).min().unwrap();
+            let max_x = region.iter().map(|(x, _)| x).max().unwrap();
+            let max_y = region.iter().map(|(_, y)| y).max().unwrap();
+
+            let x = (*min_x * step_x) as f32;
+            let y = (*min_y * step_y) as f32;
+            let w = ((*max_x - *min_x + 1) * step_x) as f32;
+            let h = ((*max_y - *min_y + 1) * step_y) as f32;
+
+            let avg_density = region.iter()
+                .map(|(gx, gy)| edge_cells.iter().find(|(egx, egy, _)| *egx == *gx && *egy == *gy).map(|(_, _, d)| d).unwrap_or(&0.0))
+                .sum::<f32>() / region.len() as f32;
+            
+            let confidence = (avg_density * 1.5).min(0.95).max(0.4);
+
+            log!("Detection: found face region {} cells, density={:.3}, confidence={:.2}", region.len(), avg_density, confidence);
+
+            detections.push(detection::FaceDetection::new(
+                detection_id,
+                x,
+                y,
+                w,
+                h,
+                confidence,
+            ));
+            detection_id += 1;
+        }
+    }
+
+    log!("Detection: final {} face regions detected", detections.len());
+    detections
+}
+
+fn calculate_edge_density(data: &[u8], x: u32, y: u32, w: u32, h: u32, img_width: u32) -> f32 {
+    let mut edge_count = 0;
+    let mut total_count = 0;
+
+    // Sample edges by looking at pixel differences (both horizontal and vertical)
+    for dy in 0..h.saturating_sub(1) {
+        for dx in 0..w.saturating_sub(1) {
+            let px = x + dx;
+            let py = y + dy;
+
+            if px + 1 < img_width && py + 1 < img_width {
+                let idx1 = ((py * img_width + px) * 4) as usize;
+                let idx2_h = ((py * img_width + (px + 1)) * 4) as usize; // horizontal
+                let idx2_v = (((py + 1) * img_width + px) * 4) as usize; // vertical
+
+                // Check horizontal edge
+                if idx1 + 2 < data.len() && idx2_h + 2 < data.len() {
+                    let b1 = (data[idx1] as f32 + data[idx1 + 1] as f32 + data[idx1 + 2] as f32) / 3.0;
+                    let b2 = (data[idx2_h] as f32 + data[idx2_h + 1] as f32 + data[idx2_h + 2] as f32) / 3.0;
+
+                    if (b1 - b2).abs() > 15.0 {  // Lowered from 30.0
+                        edge_count += 1;
+                    }
+                    total_count += 1;
+                }
+                
+                // Check vertical edge
+                if idx1 + 2 < data.len() && idx2_v + 2 < data.len() {
+                    let b1 = (data[idx1] as f32 + data[idx1 + 1] as f32 + data[idx1 + 2] as f32) / 3.0;
+                    let b2 = (data[idx2_v] as f32 + data[idx2_v + 1] as f32 + data[idx2_v + 2] as f32) / 3.0;
+
+                    if (b1 - b2).abs() > 15.0 {  // Lowered from 30.0
+                        edge_count += 1;
+                    }
+                    total_count += 1;
                 }
             }
         }
     }
 
-    detections
+    if total_count > 0 {
+        edge_count as f32 / total_count as f32
+    } else {
+        0.0
+    }
 }
 
 fn sample_brightness(data: &[u8], x: u32, y: u32, w: u32, h: u32, img_width: u32) -> f32 {
     let mut total = 0.0;
     let mut count = 0;
 
-    for dy in 0..h.min(10) {
-        for dx in 0..w.min(10) {
+    let sample_step = w / 4;
+    let sample_step = sample_step.max(1);
+
+    for dy in (0..h.min(20)).step_by(sample_step as usize) {
+        for dx in (0..w.min(20)).step_by(sample_step as usize) {
             let px = x + dx;
             let py = y + dy;
             
@@ -603,7 +1113,6 @@ fn sample_brightness(data: &[u8], x: u32, y: u32, w: u32, h: u32, img_width: u32
 fn draw_detections_and_tracks(
     video_id: &str,
     canvas_id: &str,
-    _detections: &[detection::FaceDetection],
     tracks: &[tracking::Track],
 ) {
     let window = match web_sys::window() {
@@ -654,23 +1163,22 @@ fn draw_detections_and_tracks(
 
     ctx.clear_rect(0.0, 0.0, video_width as f64, video_height as f64);
 
-    ctx.set_stroke_style_str("#7b74ff");
-    ctx.set_line_width(3.0);
-    ctx.set_font("14px sans-serif");
-    ctx.set_fill_style_str("#7b74ff");
+    ctx.set_stroke_style_str("#4caf50");
+    ctx.set_line_width(2.0);
+    ctx.set_font("12px monospace");
 
     for track in tracks {
         let (x, y, w, h) = track.detection.bbox;
         
         ctx.stroke_rect(x as f64, y as f64, w as f64, h as f64);
         
-        let label = format!("Track #{} ({:.0}%)", track.track_id, track.detection.confidence * 100.0);
-        let text_y = if y > 25.0 { y - 8.0 } else { y + h + 20.0 };
+        let label = format!("#{} {:.0}%", track.track_id, track.detection.confidence * 100.0);
+        let text_y = if y > 20.0 { y - 5.0 } else { y + h + 15.0 };
         
-        ctx.set_fill_style_str("rgba(123, 116, 255, 0.8)");
-        ctx.fill_rect(x as f64, (text_y - 18.0) as f64, 150.0, 22.0);
+        ctx.set_fill_style_str("rgba(76, 175, 80, 0.9)");
+        ctx.fill_rect(x as f64, (text_y - 15.0) as f64, 80.0, 16.0);
         
         ctx.set_fill_style_str("#ffffff");
-        let _ = ctx.fill_text(&label, x as f64 + 4.0, text_y as f64);
+        let _ = ctx.fill_text(&label, x as f64 + 3.0, text_y as f64);
     }
 }
