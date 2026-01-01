@@ -320,6 +320,82 @@ fn app() -> Element {
     let mut current_page = use_signal(|| Page::Dashboard);
 
     rsx! {
+        document::Script {
+            r#"
+// MediaPipe Face Detection Integration
+let faceDetector = null;
+let isMediaPipeReady = false;
+
+async function initMediaPipe() {{
+    try {{
+        const vision = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.2');
+        
+        const {{ FaceDetector, FilesetResolver }} = vision;
+        
+        const filesetResolver = await FilesetResolver.forVisionTasks(
+            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.2/wasm"
+        );
+        
+        faceDetector = await FaceDetector.createFromOptions(filesetResolver, {{
+            baseOptions: {{
+                modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite',
+                delegate: "GPU"
+            }},
+            runningMode: "VIDEO",
+            minDetectionConfidence: 0.5
+        }});
+        
+        isMediaPipeReady = true;
+        console.log("✓ MediaPipe Face Detector initialized");
+    }} catch (error) {{
+        console.warn("Failed to initialize MediaPipe:", error);
+        isMediaPipeReady = false;
+    }}
+}}
+
+window.detectFacesMediaPipe = function(videoId) {{
+    if (!isMediaPipeReady || !faceDetector) {{
+        return null;
+    }}
+    
+    try {{
+        const video = document.getElementById(videoId);
+        if (!video || video.readyState < 2) {{
+            return null;
+        }}
+        
+        const startTimeMs = performance.now();
+        const detections = faceDetector.detectForVideo(video, startTimeMs);
+        
+        if (!detections || !detections.detections || detections.detections.length === 0) {{
+            return [];
+        }}
+        
+        const results = detections.detections.map(detection => {{
+            const bbox = detection.boundingBox;
+            return {{
+                x: bbox.originX,
+                y: bbox.originY,
+                width: bbox.width,
+                height: bbox.height,
+                score: detection.categories[0]?.score || 0.5
+            }};
+        }});
+        
+        return results;
+    }} catch (error) {{
+        console.error("MediaPipe detection error:", error);
+        return null;
+    }}
+}};
+
+if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', initMediaPipe);
+}} else {{
+    initMediaPipe();
+}}
+            "#
+        }
         style { "{GLOBAL_STYLE}" }
         div { class: "container",
             nav {
@@ -844,18 +920,70 @@ fn detect_faces_from_video(
     video_id: &str,
     canvas_id: &str,
 ) -> Option<Vec<detection::FaceDetection>> {
+    use wasm_bindgen::prelude::*;
+    
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_namespace = window, js_name = detectFacesMediaPipe)]
+        fn detect_faces_mediapipe(video_id: &str) -> JsValue;
+    }
+    
+    // Try MediaPipe first
+    let js_result = detect_faces_mediapipe(video_id);
+    
+    if !js_result.is_null() && !js_result.is_undefined() {
+        if let Ok(detections_js) = js_result.dyn_into::<js_sys::Array>() {
+            let mut detections = Vec::new();
+            
+            for i in 0..detections_js.length() {
+                if let Some(det_obj) = detections_js.get(i).dyn_into::<js_sys::Object>().ok() {
+                    if let (Ok(x_val), Ok(y_val), Ok(w_val), Ok(h_val), Ok(score_val)) = (
+                        js_sys::Reflect::get(&det_obj, &JsValue::from_str("x")),
+                        js_sys::Reflect::get(&det_obj, &JsValue::from_str("y")),
+                        js_sys::Reflect::get(&det_obj, &JsValue::from_str("width")),
+                        js_sys::Reflect::get(&det_obj, &JsValue::from_str("height")),
+                        js_sys::Reflect::get(&det_obj, &JsValue::from_str("score")),
+                    ) {
+                        if let (Some(x), Some(y), Some(w), Some(h), Some(score)) = (
+                            x_val.as_f64(),
+                            y_val.as_f64(),
+                            w_val.as_f64(),
+                            h_val.as_f64(),
+                            score_val.as_f64(),
+                        ) {
+                            detections.push(detection::FaceDetection::new(
+                                i,
+                                x as f32,
+                                y as f32,
+                                w as f32,
+                                h as f32,
+                                score as f32,
+                            ));
+                        }
+                    }
+                }
+            }
+            
+            if !detections.is_empty() {
+                log!("MediaPipe: detected {} faces", detections.len());
+                return Some(detections);
+            }
+        }
+    }
+    
+    // Fallback to simple detection if MediaPipe not available
+    log!("Falling back to simple edge detection");
+    
     let window = web_sys::window()?;
     let document = window.document()?;
 
     let video: HtmlVideoElement = document.get_element_by_id(video_id)?.dyn_into().ok()?;
     let canvas: HtmlCanvasElement = document.get_element_by_id(canvas_id)?.dyn_into().ok()?;
 
-    // Check if video is ready
     let video_width = video.video_width();
     let video_height = video.video_height();
     
     if video_width == 0 || video_height == 0 {
-        log!("⚠ Video not ready: {}x{}", video_width, video_height);
         return None;
     }
 
@@ -868,26 +996,10 @@ fn detect_faces_from_video(
         .dyn_into()
         .ok()?;
 
-    // Draw video frame to canvas
-    if ctx.draw_image_with_html_video_element(&video, 0.0, 0.0).is_err() {
-        log!("✗ Failed to draw image to canvas");
-        return None;
-    }
+    ctx.draw_image_with_html_video_element(&video, 0.0, 0.0).ok()?;
+    let image_data = ctx.get_image_data(0.0, 0.0, video_width as f64, video_height as f64).ok()?;
 
-    // Extract image data
-    let image_data = match ctx.get_image_data(0.0, 0.0, video_width as f64, video_height as f64) {
-        Ok(data) => data,
-        Err(_) => {
-            log!("✗ Failed to get image data");
-            return None;
-        }
-    };
-
-    log!("✓ Extracted {}x{} image data, {} bytes", video_width, video_height, image_data.data().len());
-
-    let detections = simple_face_detection(&image_data, video_width, video_height);
-
-    Some(detections)
+    Some(simple_face_detection(&image_data, video_width, video_height))
 }
 
 fn capture_face_from_video(
